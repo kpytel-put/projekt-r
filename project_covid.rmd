@@ -1,0 +1,364 @@
+---
+title: "Analiza danych covid-19"
+author: "Klaudia Pytel"
+date: 'Ostatnia aktualizacja: `r format(Sys.time(), "%d %B, %Y")`'
+output: 
+  html_document:
+    number_sections: false
+    toc: true
+    toc_float: true
+---
+
+
+***
+
+<style>
+.nav>li>a {
+    position: relative;
+    display: block;
+    padding: 10px 15px;
+    color: #99004d;
+}
+.nav-pills>li.active>a, .nav-pills>li.active>a:hover, .nav-pills>li.active>a:focus {
+    color: #ffffff;
+    background-color: #99004d;
+}
+.bordered {
+  border: solid;
+}
+</style>
+
+# Informacje o projekcie
+
+### Spis wykorzystanych bibliotek
+``` {r LoadLib, message=FALSE}
+library(Hmisc)
+library(dplyr)
+library(tidyr)
+library(caret)
+library(mlbench)
+```
+
+```{r InitializeDataFrame, message=FALSE, echo=FALSE}
+wuhan_df <- read.csv("data.csv") %>%
+  rename(
+    id = PATIENT_ID,
+    sample_date = RE_DATE,
+    admission_time = Admission.time,
+    discharge_time = Discharge.time,
+    hs_ctnt = Hypersensitive.cardiac.troponinI,
+    hgb = hemoglobin,
+    serum_cl = Serum.chloride,
+    pt = Prothrombin.time,
+    pct = procalcitonin,
+    eos_p = eosinophils...,
+    il_2r = Interleukin.2.receptor,
+    salp = Alkaline.phosphatase,
+    hsa = albumin,
+    baso_p = basophil...,
+    il_10 = Interleukin.10,
+    br_t = Total.bilirubin,
+    mpv_c = Platelet.count,
+    mono_p = monocytes...,
+    at = antithrombin,
+    il_8 = Interleukin.8,
+    indirect_br = indirect.bilirubin,
+    rdw = Red.blood.cell.distribution.width,
+    neut_p = neutrophils...,
+    p_t = total.protein,
+    quant_t_palladium_ab = Quantification.of.Treponema.pallidum.antibodies,
+    pt_activity = Prothrombin.activity,
+    hbsag = HBsAg,
+    mcv = mean.corpuscular.volume,
+    ht = hematocrit,
+    wb_c = White.blood.cell.count,
+    thf_alpha = Tumor.necrosis.factorÎ.,
+    mchc = mean.corpuscular.hemoglobin.concentration,
+    fibrinogen = fibrinogen,
+    il_1beta = Interleukin.1Î.,
+    urea = Urea,
+    lym_c = lymphocyte.count,
+    ph = PH.value,
+    rb_c = Red.blood.cell.count,
+    eos_c = Eosinophil.count,
+    corrected_ca = Corrected.calcium,
+    serum_k = Serum.potassium,
+    glucose = glucose,
+    an_c = neutrophils.count,
+    db = Direct.bilirubin,
+    mpv = Mean.platelet.volume,
+    f = ferritin,
+    rds_sd = RBC.distribution.width.SD,
+    tt = Thrombin.time,
+    lym_p = X...lymphocyte,
+    quant_hcv_ab = HCV.antibody.quantification,
+    dd = D.D.dimer,
+    cholesterol_t = Total.cholesterol,
+    ast = aspartate.aminotransferase,
+    uric_acid = Uric.acid,
+    hco3 = HCO3.,
+    ca = calcium,
+    nt_probnp = Amino.terminal.brain.natriuretic.peptide.precursor.NT.proBNP.,
+    ldh = Lactate.dehydrogenase,
+    plcr = platelet.large.cell.ratio,
+    il_6 = Interleukin.6,
+    fdp = Fibrin.degradation.products,
+    mono_c = monocytes.count,
+    pdw = PLT.distribution.width,
+    globulin = globulin,
+    gamma_gtp = Îł.glutamyl.transpeptidase,
+    inr = International.standard.ratio,
+    baso_c = basophil.count...,
+    ncov_2019 = X2019.nCoV.nucleic.acid.detection,
+    mch = mean.corpuscular.hemoglobin,
+    ptt = Activation.of.partial.thromboplastin.time,
+    hs_crp = High.sensitivity.C.reactive.protein,
+    hiv_rna = HIV.antibody.quantification,
+    serum_na = serum.sodium,
+    thromocytocrit = thrombocytocrit,
+    esr = ESR,
+    gpt = glutamic.pyruvic.transaminase,
+    egfr = eGFR,
+    creatine = creatinine
+  ) %>%
+  fill(id)
+
+```
+
+# Wstępna analiza danych
+
+### Wygląd danych źródłowych po przetworzeniu
+``` {r Table View, out.width = "90%", echo = FALSE, message=FALSE}
+knitr::kable(head(wuhan_df[, c(1:4,8:12)]), "simple")
+
+```
+
+### Opis zbioru danych i podstawowe statystyki
+
+Dane zawierają informacje o wynikach badań krwi `r nrow(unique(subset(wuhan_df, id != "")))`
+pacjentów przyjętych do szpitala Tongji w mieście Wuhan, w Chinach. Sposób pozyskania danych oraz ich podstawowe statystyki zostaly opisane w [artykule Tan et al](https://www.nature.com/articles/s42256-020-0180-7). Analizowane dane zostały zebrane między `r summarise(subset(wuhan_df, sample_date != ""), min(sample_date))` a `r summarise(subset(wuhan_df, sample_date != ""), max(sample_date))`, czyli na początku wybuchu pandemii choroby COVID-19 wywoływanej przez koronawirusa SARS-CoV-2. W badanym zbiorze danych jest dokładnie `r dim(wuhan_df)[1]` rekordów, przy czym każdy rekord określa wyniki jednego z wielu pobrań krwi dla danego pacjenta. Cały zbiór danych zawiera `r dim(wuhan_df)[2]` kolumn, które przedstawiają takie informacje jak wiek pacjenta, datę przyjęcia do szpitala, datę pobrania krwi, ilość hemoglobiny i inne parametry krwi. <br>
+Wśród banadych osób znajduje się `r nrow(wuhan_df %>% distinct(id, gender) %>% filter(gender == 2) %>% filter(id != ""))` kobiet i `r nrow(wuhan_df %>% distinct(id, gender) %>% filter(gender == 1) %>% filter(id != ""))` mężczyzn, którzy stanowią większość badanych przypadków. Zarażenie koronawirusem przeżyło `r nrow(wuhan_df %>% distinct(id, outcome) %>% filter(outcome == 1) %>% filter(id != ""))` pacjentów szpitala, a zmarło `r nrow(wuhan_df %>% distinct(id, outcome) %>% filter(outcome == 0) %>% filter(id != ""))`. 
+
+### Analiza atrybutów
+
+```{r Attributes, out.width = "90%", echo=FALSE, message=FALSE, class.output = ".bordered"}
+describe(wuhan_df[-1:-8]) %>% html()
+```
+
+### Age / Death
+
+``` {r AGE, out.width = "90%", echo = FALSE, message=FALSE}
+df_age <- wuhan_df %>%
+  mutate(threshold = (round(age / 10) * 10)) %>%
+  group_by(id) %>%
+  group_by(threshold) %>%
+  dplyr::summarize(outcome=mean(outcome, na.rm=TRUE))
+
+x <- df_age$threshold
+y <- df_age$outcome
+xLim <- c(20, 95)
+yLim <- c(0, 1)
+
+plot(x, y, xlab="Age", ylab="Death probability", xlim=xLim, ylim=yLim, type = "l", lty = 1)
+
+```
+
+### Gender / Death count
+
+```{r Gender, out.width = "90%", echo = FALSE, message=FALSE}
+df_gender <- wuhan_df %>%
+  mutate(genderStr = ifelse(gender == 1, "male", "female")) %>%
+  distinct(id, genderStr, outcome) %>%
+  group_by(genderStr) %>%
+  dplyr::summarize(outcome=sum(outcome, na.rm=TRUE))
+
+df_gender
+
+yLim <- c(0, 150)
+barplot(df_gender$outcome,
+        names.arg=df_gender$genderStr,
+        width=0.1,
+        ylim=yLim,
+        main = "Gender / Death count", 
+        xlab = "gender",
+        col=c("darkolivegreen1","deepskyblue1")
+)
+legend("topright",  fill = c("darkolivegreen1","deepskyblue1"), legend = df_gender$genderStr)
+
+```
+
+### Gender / Death percentage
+
+```{r GenderPercent, out.width = "90%", echo = FALSE, message=FALSE}
+df_gender <- wuhan_df %>%
+  mutate(genderStr = ifelse(gender == 1, "male", "female")) %>%
+  group_by(genderStr) %>%
+  dplyr::summarize(outcome=mean(outcome, rm.na=TRUE))
+
+yLim <- c(0, 1)
+barplot(df_gender$outcome, 
+        names.arg=df_gender$genderStr,
+        width = 0.1,
+        main = "Gender / Death percentage", 
+        xlab = "gender",
+        ylim=yLim,
+        col = c("darkolivegreen1","deepskyblue1")
+)
+legend("topright",  fill = c("darkolivegreen1","deepskyblue1"), legend =df_gender$genderStr)
+
+```
+
+### LDH amount / Death corelation
+
+Threshold value - 70
+
+```{r LDH Plot, out.width = "90%", echo = FALSE, message=FALSE}
+df_ldh <- wuhan_df %>%
+  group_by(id) %>%
+  dplyr::summarize(
+    ldh=mean(ldh, na.rm=TRUE),
+    outcome=mean(outcome)
+  ) %>%
+  ungroup %>%
+  select(outcome, ldh) %>%
+  mutate(threshold = ((round(ldh / 70)) * 70)) %>%
+  group_by(threshold) %>%
+  dplyr::summarize(outcome = mean(outcome, na.rm=TRUE)) %>%
+  na.omit
+
+x <- df_ldh$threshold
+y <- df_ldh$outcome
+xLim <- c(50, 1700)
+yLim <- c(0, 1)
+
+plot(x, y, xlab="LDH", ylab="Death probability", xlim=xLim, ylim=yLim, type = "l", lty = 1)
+```
+
+### HS-CRP amount / Death corelation
+
+Threshold value - 25
+
+```{r HS-CRP Plot, out.width = "90%", echo = FALSE, message=FALSE}
+df_crp <- wuhan_df %>%
+  group_by(id) %>%
+  dplyr::summarize(
+    hs_crp=mean(hs_crp, na.rm=TRUE),
+    outcome=mean(outcome)
+  ) %>%
+  ungroup %>%
+  select(outcome, hs_crp) %>%
+  mutate(threshold = ((round(hs_crp / 25)) * 25)) %>%
+  group_by(threshold) %>%
+  dplyr::summarize(outcome = mean(outcome, na.rm=TRUE)) %>%
+  na.omit
+
+x <- df_crp$threshold
+y <- df_crp$outcome
+xLim <- c(0, 300)
+yLim <- c(0, 1)
+
+plot(x, y, xlab="HS-CRP", ylab="Death probability", xlim=xLim, ylim=yLim, type = "l", lty = 1)
+```
+
+### Lymphocyte (%) / Death Ratio
+
+Threshold value - 10
+
+```{r Lymphocyte Plot, out.width = "90%", echo = FALSE, message=FALSE}
+df_lym <- wuhan_df %>%
+  group_by(id) %>%
+  dplyr::summarize(
+    lym_p=mean(lym_p, na.rm=TRUE),
+    outcome=mean(outcome)
+  ) %>%
+  ungroup %>%
+  select(outcome, lym_p) %>%
+  mutate(threshold = ((round(lym_p / 10)) * 10)) %>%
+  group_by(threshold) %>%
+  dplyr::summarize(outcome = mean(outcome, na.rm=TRUE)) %>%
+  na.omit
+
+x <- df_lym$threshold
+y <- df_lym$outcome
+xLim <- c(0, 50)
+yLim <- c(0, 1)
+
+plot(x, y, xlab="Lymphocyte (%)", ylab="Death probability", xlim=xLim, ylim=yLim, type = "l", lty = 1)
+```
+
+
+# Predykcja
+
+Do utworzenia klasyfikatora predykującego czy pacjent przeżyje czy nie, wykorzystane zostały trzy cechy, które dzięki wcześniejszym przeanalizowaniu danych dawały przesłanki iż pełnią one istotną rolę w przeżywalności pacjenta. Tymi parametrami są: LDH, HS-CRP oraz procentowa liczba limfocytów we krwii.
+
+W pierwszej kolejności, po wgraniu danych z pliku CSV, dodana została kolumna Class, informująca o tym czy pacjent przeżył, czy nie. Po dodaniu kolumny Class, wypełnione zostały wszystkie wiersze DataFrame, które nie posiadały ID pacjenta - ze struktury dokumentu można było wywnioskować, że rekordy są posortowane po ID pacjenta, przy czym tylko pierwszy wiersz jest oznaczany ID - aby wypełnić brakujące wiersze wykorzystano funkcję `fill` z pakietu `tidyr`. Ostatnim krokiem, wstępnie obrabiającym dane, była zmiana nazw kolumn na bardziej czytelne.
+
+Po wstępnym przygotowaniu danych, dla każdego pacjenta zostały uśrednione wartości LDH, CRP oraz Limfocytów, a następnie wybrane zostały tylko te kolumn, oraz kolumna Class. Tak przygotowany DataFrame nadawał się do nauki klasyfikatora.
+
+``` {r ML, out.width = "90%", echo = FALSE, message=FALSE}
+prediction_df <- wuhan_df %>%
+  mutate(Class=factor(outcome == 0, labels = c("DEAD", "ALIVE"))) %>%
+  group_by(id) %>%
+  dplyr::summarize(
+    ldh=mean(ldh, na.rm=TRUE),
+    hs_crp=mean(hs_crp, na.rm=TRUE),
+    lym_p=mean(lym_p, na.rm=TRUE),
+    Class
+  ) %>%
+  ungroup %>%
+  distinct %>%
+  select(Class, ldh, hs_crp, lym_p) %>%
+  na.omit
+
+set.seed(135)
+inTraining <- createDataPartition(
+  y = prediction_df$Class,
+  p = .75,
+  list = FALSE
+)
+
+training <- prediction_df[inTraining,]
+testing <- prediction_df[-inTraining,]
+
+ctrl <- trainControl(
+  method="repeatedcv",
+  number = 2,
+  repeats = 5
+)
+```
+
+
+### KNN
+
+KNN - Jeden z najprostszych algorytmów uczących, polegający na dopasowaniu nowego wystąpienia do jednej z kilku grup na podstawie analizy kilku najbliższych mu (najbliższych w n-wymiarowej przestrzeni dla n wybranych cech) innych rekordów.
+
+``` {r KNN, out.width = "90%", echo = FALSE, message=FALSE, comment=NA, class.output = ".bordered"}
+fit <- train(Class ~ ., data = training, method = "knn", trControl = ctrl)
+rfClasses <- predict(fit, newdata = testing)
+cM <- confusionMatrix(data = rfClasses, testing$Class)
+cM
+
+```
+```{r MatrixKNN, out.width = "90%", echo=FALSE, message=FALSE, class.output = ".bordered"}
+fourfoldplot(cM$table, color = c("#CC6666", "#99CC99"),
+             conf.level = 0, margin = 1, main = "Confusion Matrix")
+```
+
+### Naive Bayes:
+
+Metoda naiwny klasyfikator Bayesa jest drugim klasyfikatorem wybranym do zbadania. Opiera się on na prostej probabilistyce. Pomimo jego prostoty, w wielu przypadkach sprawdza się lepiej od skomplikowanych klasyfikatorów
+
+```{r Bayes, out.width = "90%", echo = FALSE, message=FALSE, comment=NA, class.output = ".bordered"}
+# Bayes
+fit <- train(Class ~ ., data = training, method = "bayesglm", trControl = ctrl)
+rfClasses <- predict(fit, newdata = testing)
+cM <- confusionMatrix(data = rfClasses, testing$Class)
+cM
+```
+```{r MatrixBayes, out.width = "90%", echo=FALSE, message=FALSE}
+fourfoldplot(cM$table, color = c("#CC6666", "#99CC99"),
+             conf.level = 0, margin = 1, main = "Confusion Matrix")
+```
+
+
+Jak widać z powyższych wyników działania wybranych klasyfikatorów oraz cech wybranych do nauki modelu, trafność obydwu - pomimo iż prostych - klasyfikatorów na ciągu testowym daje bardzo wysokie wyniki. Pokazuje to, że cechy które zostały wybrane do nauki modelu, mogą być istotne w przebiegu choroby. Jednakże, po uśrednieniu wartości wyników morfologicznych, zbiór danych ogranicza się jedynie do 350 pacjentów, co jest bardzo niewielką liczbą danych, dzięki której moglibyśmy z większą pewnością przeanalizować wyniki predykcji wybranych klasyfikatorów, oraz istotność wybranych cech.
